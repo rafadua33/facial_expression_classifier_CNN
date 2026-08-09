@@ -18,6 +18,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 from torchvision import transforms
+import os
 
 from model import EmotionCNN
 
@@ -28,11 +29,18 @@ from model import EmotionCNN
 # even though the model itself is working correctly.
 CLASS_NAMES = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
 
-# Haar Cascade for face detection, shipped with OpenCV itself -- no
-# separate download needed.
-FACE_CASCADE = cv2.CascadeClassifier(
-    cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-)
+# Haar Cascade for face detection. Prefer the OpenCV-packaged cascade but
+# fall back to a local copy inside the repo (src/) when the package
+# doesn't include the XML data (some wheel builds omit it).
+DEFAULT_CASCADE = "haarcascade_frontalface_default.xml"
+_system_cascade = os.path.join(cv2.data.haarcascades, DEFAULT_CASCADE)
+_local_cascade = os.path.join(os.path.dirname(__file__), DEFAULT_CASCADE)
+_cascade_path = _system_cascade if os.path.exists(_system_cascade) else _local_cascade
+FACE_CASCADE = cv2.CascadeClassifier(_cascade_path)
+if FACE_CASCADE is None or (hasattr(FACE_CASCADE, 'empty') and FACE_CASCADE.empty()):
+    # Leave FACE_CASCADE as None when loading fails; detect_face will handle it.
+    print(f"Warning: Haar cascade failed to load. Tried: {_system_cascade} and {_local_cascade}")
+    FACE_CASCADE = None
 
 # Same normalization used during training (see dataset.py's eval_transform)
 # so the model sees inputs in the same numeric range it was trained on.
@@ -62,6 +70,12 @@ def detect_face(image: Image.Image) -> Image.Image:
     """
     # Haar Cascade works on OpenCV's format: grayscale numpy arrays
     image_np = np.array(image.convert("L"))
+
+    # If the cascade failed to load, skip face detection and return the
+    # original image so the pipeline still produces a prediction.
+    if FACE_CASCADE is None:
+        print("Warning: Haar cascade not available; using full image.")
+        return image
 
     faces = FACE_CASCADE.detectMultiScale(
         image_np, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
